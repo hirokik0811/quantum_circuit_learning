@@ -4,8 +4,8 @@ Created on Apr 30, 2019
 @author: kwibu
 '''
 import numpy as np
-import cupy as cp
 from scipy import linalg
+from scipy import optimize
 import itertools
 import tqdm
 from qulacs import QuantumCircuit, QuantumState
@@ -23,6 +23,7 @@ class QCL:
         self.n_qubits = n_qubits
         self.depth = depth
         self.theta = np.random.uniform(0.0, 2*np.pi, (n_qubits, 3*depth))
+        self.amp = np.random.uniform(-1.0, 1.0)
         def ising_approx(T, trotter_steps=1000):
             """
             Generate a unitary to simulate time evolution of a quantum state with Ising model Hamiltonian:
@@ -144,7 +145,8 @@ class QCL:
         
         Arguments:
         X: mxd numpy array, d-dimensional training data with m samples.
-        Y: mx1 numpy array, training label.
+        Y: mx1 numpy array, training label. If is_classification = True the values must be integer.
+        observable: qulacs.Observable, the observable to measure result qubit. 
         max_itr: int, the maximum number of SGD iterations.
         batch_size: int, if greater than one, the variables are updated with mini-batch SGD.
         gradient_method: string, method to update the variables. 'steepest', 'quasi-newton' are supported. 
@@ -156,7 +158,7 @@ class QCL:
         """
         loss_list = []
         gradient_list = []
-        D_list = [cp.eye(self.n_qubits*3*self.depth)]
+        D_list = [np.eye(self.n_qubits*3*self.depth)]
         for itr in tqdm.tqdm(range(max_itr)):
             batch_gradient_list = []
             batch_loss_list = []
@@ -165,7 +167,8 @@ class QCL:
                 x = X[ind]
                 y = Y[ind]
                 grad = np.zeros((self.n_qubits, 3*self.depth))
-                loss = self.get_expectation(x, self.theta, observable)-y
+                B = self.get_expectation(x, self.theta, observable)
+                loss = self.amp*B-y
                 batch_loss_list.append(loss**2)
                 for i in range(self.n_qubits):
                     for j in range(3*self.depth):
@@ -175,28 +178,25 @@ class QCL:
                         minus[i, j] -= np.pi/2
                         B_plus = self.get_expectation(x, plus, observable)
                         B_minus = self.get_expectation(x, minus, observable)
-                        grad[i, j] = (B_plus-B_minus)*loss # Partial Gradient
+                        grad[i, j] = self.amp*(B_plus-B_minus)*loss # Partial Gradient
                 batch_gradient_list.append(grad)
             mean_grad = sum(batch_gradient_list)/batch_size
             gradient_list.append(mean_grad)
             loss_list.append(sum(batch_loss_list)/batch_size)
-            print("loss: %.2f" % loss_list[-1])
+            print("loss: %.3f" % loss_list[-1])
             # Update with gradient method
             if gradient_method == 'steepest':
                 self.theta -= step_size*mean_grad
+                self.amp -= step_size*2*B*loss
+                print(self.amp)
+            else:
+                raise ValueError("Unsupported optimization method %s" % gradient_method)
+            """
             if gradient_method == 'quasi-newton':
-                q = cp.reshape(cp.ravel(cp.array(mean_grad - gradient_list[-2])) if itr > 1 else cp.ravel(cp.array(mean_grad)), [-1, 1])
-                prev_theta = self.theta.copy()
-                self.theta -= cp.asnumpy(cp.reshape(step_size*cp.matmul(D_list[-1], cp.array(cp.transpose(cp.ravel(mean_grad)))), [self.n_qubits, 3*self.depth]))
-                p = cp.reshape(cp.ravel(cp.array(self.theta - prev_theta)), [-1, 1])
-                t = cp.matmul(cp.matmul(cp.transpose(cp.array(q)), D_list[-1]), q)
-                v = p/cp.matmul(cp.transpose(p), q) - cp.matmul(D_list[-1], q)/t
-                D = D_list[-1] + cp.matmul(p, cp.transpose(p))/cp.matmul(cp.transpose(p), q)\
-                    - cp.matmul(cp.matmul(cp.matmul(D_list[-1], q), cp.transpose(q)), D_list[-1])/cp.dot(cp.matmul(cp.transpose(q), D_list[-1]), q)\
-                    + xi*t*cp.matmul(v, cp.transpose(v))
-                D_list.append(D)
+                #### NOT IMPLEMENTED YET ####
+            """
+            
                 
         return loss_list
     
-        
-        
+    
